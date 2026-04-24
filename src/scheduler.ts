@@ -1,10 +1,11 @@
 import { spawnSync } from "child_process";
-import { writeFileSync, unlinkSync } from "fs";
+import { writeFileSync, unlinkSync, mkdirSync } from "fs";
 import { tmpdir, homedir } from "os";
 import { join } from "path";
 import type { Job } from "./storage.js";
 
 export async function registerTimer(job: Job): Promise<void> {
+  mkdirSync(join(homedir(), ".config", "opencode-cron", "logs"), { recursive: true });
   const cmd = `${process.execPath} ${job.firePath} ${job.id} >> ${logPath(job.id)} 2>&1`;
   const tag = `opencode-cron:${job.id}`;
   setCrontab(getCrontab() + `# ${tag}\n${job.cron} ${cmd}\n`);

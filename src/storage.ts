@@ -14,6 +14,7 @@ export interface Job {
   recurring: boolean;
   firePath: string;
   createdAt: string;
+  workspaceDir?: string;
 }
 
 const storageDir = join(homedir(), ".config", "opencode-cron", "jobs");

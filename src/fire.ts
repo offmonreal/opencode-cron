@@ -23,13 +23,17 @@ if (serverUsername || serverPassword) {
   authHeaders["Authorization"] = `Basic ${encoded}`;
 }
 
-// Always resolve the current active session at fire time
+// Always resolve the current active session at fire time, preferring the job's workspace directory
 async function getCurrentSessionId(): Promise<string> {
   const res = await fetch(`${serverUrl}/session`, { headers: authHeaders });
   if (!res.ok) return job.sessionId;
-  const sessions: Array<{ id: string; parentID?: string; time: { updated: number } }> = await res.json();
-  const sorted = sessions.filter(s => !s.parentID).sort((a, b) => b.time.updated - a.time.updated);
-  return sorted[0]?.id ?? job.sessionId;
+  const sessions: Array<{ id: string; directory?: string; parentID?: string; time: { updated: number } }> = await res.json();
+  const roots = sessions.filter(s => !s.parentID).sort((a, b) => b.time.updated - a.time.updated);
+  if (job.workspaceDir) {
+    const match = roots.find(s => s.directory === job.workspaceDir);
+    if (match) return match.id;
+  }
+  return roots[0]?.id ?? job.sessionId;
 }
 
 const sessionId = await getCurrentSessionId();

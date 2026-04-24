@@ -35,7 +35,7 @@ server.tool(
     const sessionId = await findCurrentSession(url);
     const serverUsername = process.env.OPENCODE_SERVER_USERNAME;
     const serverPassword = process.env.OPENCODE_SERVER_PASSWORD;
-    const job = await createJob({ cron, prompt, sessionId, serverUrl: url, serverUsername, serverPassword, recurring, firePath });
+    const job = await createJob({ cron, prompt, sessionId, serverUrl: url, serverUsername, serverPassword, recurring, firePath, workspaceDir: process.cwd() });
     await registerTimer(job);
     return {
       content: [{ type: "text", text: `Job ${job.id} created. Cron: ${cron}. Session: ${sessionId}.` }],
