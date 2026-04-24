@@ -6,17 +6,32 @@ import { findCurrentSession, resolveServerUrl } from "./session.js";
 import { createJob, deleteJob, listJobs } from "./storage.js";
 import { registerTimer, unregisterTimer } from "./scheduler.js";
 import { saveServerState } from "./server-state.js";
+import { appendFileSync, mkdirSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
 
-await saveServerState({
+const logDir = join(homedir(), ".config", "opencode-cron", "logs");
+mkdirSync(logDir, { recursive: true });
+function log(msg: string) {
+  const line = `[${new Date().toISOString()}] [index] ${msg}\n`;
+  process.stderr.write(line);
+  try { appendFileSync(join(logDir, "fire.log"), line); } catch {}
+}
+
+log(`STARTUP cwd=${process.cwd()}`);
+
+// Capture server URL and credentials at startup.
+// OpenCode sets OPENCODE_SERVER_USERNAME / OPENCODE_SERVER_PASSWORD in env when spawning MCP servers.
+// Port is detected from OpenCode's own log file (see session.ts: findPortFromLog).
+saveServerState({
   serverUrl: resolveServerUrl(),
   serverUsername: process.env.OPENCODE_SERVER_USERNAME,
   serverPassword: process.env.OPENCODE_SERVER_PASSWORD,
 });
 
-// Restore persisted jobs into the in-process scheduler on startup
-for (const job of await listJobs()) {
-  await registerTimer(job);
-}
+// No job restore on startup — jobs are in-memory only.
+// When OpenCode restarts, old jobs are intentionally dropped.
+// The user must call CronCreate again to re-schedule.
 
 const server = new McpServer({ name: "opencode-cron", version: "1.0.0" });
 
@@ -26,19 +41,27 @@ server.tool(
   {
     cron: z.string().describe("Cron expression, e.g. */5 * * * *"),
     prompt: z.string().describe("Prompt text to inject when timer fires"),
-    recurring: z.boolean().optional().describe("Repeat on schedule (default: true). false = run once"),
     serverUrl: z.string().optional().describe("OpenCode server URL (default: http://localhost:4096)"),
   },
-  async ({ cron, prompt, recurring = true, serverUrl }) => {
-    const url = resolveServerUrl(serverUrl);
-    const sessionId = await findCurrentSession(url);
-    const serverUsername = process.env.OPENCODE_SERVER_USERNAME;
-    const serverPassword = process.env.OPENCODE_SERVER_PASSWORD;
-    const job = await createJob({ cron, prompt, sessionId, serverUrl: url, serverUsername, serverPassword, recurring, workspaceDir: process.cwd() });
-    await registerTimer(job);
-    return {
-      content: [{ type: "text", text: `Job ${job.id} created. Cron: ${cron}. Session: ${sessionId}.` }],
-    };
+  async ({ cron, prompt, serverUrl }) => {
+    log(`CronCreate called cron="${cron}" cwd=${process.cwd()}`);
+    try {
+      const url = resolveServerUrl(serverUrl);
+      // Pass cwd as directory so GET /session?directory=... returns only sessions
+      // for THIS workspace, not sessions from other workspaces.
+      const sessionId = await findCurrentSession(url, process.cwd());
+      const serverUsername = process.env.OPENCODE_SERVER_USERNAME;
+      const serverPassword = process.env.OPENCODE_SERVER_PASSWORD;
+      const job = createJob({ cron, prompt, sessionId, serverUrl: url, serverUsername, serverPassword, recurring: true, workspaceDir: process.cwd() });
+      registerTimer(job);
+      log(`CronCreate OK jobId=${job.id}`);
+      return {
+        content: [{ type: "text", text: `Job ${job.id} created. Cron: ${cron}. Fires every tick until stopped. To stop: call CronDelete with jobId="${job.id}".` }],
+      };
+    } catch (e: unknown) {
+      log(`CronCreate ERROR: ${e}`);
+      throw e;
+    }
   }
 );
 
@@ -47,8 +70,8 @@ server.tool(
   "Delete a scheduled cron job",
   { jobId: z.string().describe("Job ID to delete") },
   async ({ jobId }) => {
-    await unregisterTimer(jobId);
-    await deleteJob(jobId);
+    unregisterTimer(jobId);
+    deleteJob(jobId);
     return { content: [{ type: "text", text: `Job ${jobId} deleted.` }] };
   }
 );
@@ -58,7 +81,7 @@ server.tool(
   "List all scheduled cron jobs",
   {},
   async () => {
-    const jobs = await listJobs();
+    const jobs = listJobs();
     const text = jobs.length === 0
       ? "No scheduled jobs."
       : jobs.map(j => `${j.id}  ${j.cron}  session:${j.sessionId}  ${j.recurring ? "recurring" : "once"}`).join("\n");

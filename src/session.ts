@@ -10,6 +10,9 @@ interface Session {
   };
 }
 
+// OpenCode writes the sidecar port to its own log file on each launch.
+// We read it here because the port is dynamic (no fixed port by default).
+// The log file path is ~/Library/Logs/ai.opencode.desktop/*.log.
 function findPortFromLog(): string | null {
   const logDir = join(process.env.HOME ?? "", "Library/Logs/ai.opencode.desktop");
   let files: string[];
@@ -52,10 +55,18 @@ export function makeAuthHeaders(): HeadersInit {
   return { Authorization: `Basic ${encoded}` };
 }
 
-export async function findCurrentSession(serverUrl: string): Promise<string> {
+// IMPORTANT: always pass `directory` when calling from a known workspace.
+// Without it, GET /session returns only a subset of sessions (apparently limited
+// to ~18 from other workspaces), and the current workspace sessions are missing.
+// With ?directory=..., OpenCode filters to sessions for that exact workspace path.
+// Pick the most-recently-updated non-child session — that's the one the user is looking at.
+export async function findCurrentSession(serverUrl: string, directory?: string): Promise<string> {
+  const url = directory
+    ? `${serverUrl}/session?directory=${encodeURIComponent(directory)}`
+    : `${serverUrl}/session`;
   let res: Response;
   try {
-    res = await fetch(`${serverUrl}/session`, { headers: makeAuthHeaders() });
+    res = await fetch(url, { headers: makeAuthHeaders() });
   } catch {
     const port = findPortFromLog();
     const hint = port

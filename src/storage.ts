@@ -1,6 +1,3 @@
-import { readFile, writeFile, mkdir, unlink, readdir } from "fs/promises";
-import { join } from "path";
-import { homedir } from "os";
 import { randomUUID } from "crypto";
 
 export interface Job {
@@ -16,33 +13,27 @@ export interface Job {
   workspaceDir?: string;
 }
 
-const storageDir = join(homedir(), ".config", "opencode-cron", "jobs");
+// Jobs live only in memory — they die when OpenCode closes.
+// This is intentional: cron jobs are tied to the current OpenCode session.
+// No restore on restart needed (and not wanted).
+const jobs = new Map<string, Job>();
 
-async function ensureDir(): Promise<void> {
-  await mkdir(storageDir, { recursive: true });
-}
-
-export async function createJob(data: Omit<Job, "id" | "createdAt">): Promise<Job> {
-  await ensureDir();
+export function createJob(data: Omit<Job, "id" | "createdAt">): Job {
   const job: Job = { id: randomUUID(), createdAt: new Date().toISOString(), ...data };
-  await writeFile(join(storageDir, `${job.id}.json`), JSON.stringify(job, null, 2));
+  jobs.set(job.id, job);
   return job;
 }
 
-export async function getJob(id: string): Promise<Job> {
-  const raw = await readFile(join(storageDir, `${id}.json`), "utf-8");
-  return JSON.parse(raw) as Job;
+export function getJob(id: string): Job {
+  const job = jobs.get(id);
+  if (!job) throw new Error(`Job not found: ${id}`);
+  return job;
 }
 
-export async function deleteJob(id: string): Promise<void> {
-  await unlink(join(storageDir, `${id}.json`)).catch(() => {});
+export function deleteJob(id: string): void {
+  jobs.delete(id);
 }
 
-export async function listJobs(): Promise<Job[]> {
-  await ensureDir();
-  const files = (await readdir(storageDir)).filter(f => f.endsWith(".json"));
-  const jobs = await Promise.all(
-    files.map(f => readFile(join(storageDir, f), "utf-8").then(raw => JSON.parse(raw) as Job))
-  );
-  return jobs;
+export function listJobs(): Job[] {
+  return [...jobs.values()];
 }

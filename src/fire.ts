@@ -14,26 +14,16 @@ function log(msg: string) {
   try { appendFileSync(join(logDir, "fire.log"), line); } catch {}
 }
 
-async function tuiPublish(serverUrl: string, authHeaders: Record<string, string>, directory: string, body: object): Promise<Response> {
-  const url = `${serverUrl}/tui/publish?directory=${encodeURIComponent(directory)}`;
-  return fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders },
-    body: JSON.stringify(body),
-  });
-}
-
 export async function fireJob(jobId: string): Promise<void> {
   log(`START jobId=${jobId}`);
 
-  const job = await getJob(jobId).catch((e: unknown) => {
-    log(`ERROR loading job: ${e}`);
-    throw e;
-  });
-
+  const job = getJob(jobId);
   log(`job loaded: cron=${job.cron} workspaceDir=${job.workspaceDir ?? "none"}`);
 
-  const state = await loadServerState();
+  // Server state is set at startup from env vars / log detection.
+  // Falls back to values stored in the job at CronCreate time (shouldn't be needed
+  // since server state is always set, but kept as safety net).
+  const state = loadServerState();
   const serverUrl = state?.serverUrl ?? job.serverUrl;
   const serverUsername = state?.serverUsername ?? job.serverUsername;
   const serverPassword = state?.serverPassword ?? job.serverPassword;
@@ -46,44 +36,33 @@ export async function fireJob(jobId: string): Promise<void> {
     authHeaders["Authorization"] = `Basic ${encoded}`;
   }
 
-  const directory = job.workspaceDir ?? process.cwd();
+  // Use the exact session from which CronCreate was called.
+  // Each agent has its own session — we must not redirect to another.
+  const sessionId = job.sessionId;
+  log(`using sessionId=${sessionId}`);
 
-  log(`tui.prompt.append → directory=${directory} prompt="${job.prompt.slice(0, 60)}"`);
-
-  const appendRes = await tuiPublish(serverUrl, authHeaders, directory, {
-    type: "tui.prompt.append",
-    properties: { text: job.prompt },
+  // IMPORTANT: body must be { parts: [{type:"text", text}] }, NOT { text }.
+  // The /session/{id}/prompt_async endpoint follows the OpenCode message part schema.
+  // Sending { text } returns HTTP 400 "expected array, received undefined" for parts.
+  const res = await fetch(`${serverUrl}/session/${sessionId}/prompt_async`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders },
+    body: JSON.stringify({ parts: [{ type: "text", text: job.prompt }] }),
   }).catch((e: unknown) => {
-    log(`ERROR tui.prompt.append: ${e}`);
+    log(`ERROR prompt_async: ${e}`);
     throw e;
   });
 
-  if (!appendRes.ok) {
-    const body = await appendRes.text().catch(() => "");
-    log(`ERROR tui.prompt.append HTTP ${appendRes.status}: ${body.slice(0, 200)}`);
-    throw new Error(`HTTP ${appendRes.status}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    log(`ERROR prompt_async HTTP ${res.status}: ${body.slice(0, 200)}`);
+    throw new Error(`HTTP ${res.status}`);
   }
 
-  log(`tui.prompt.append OK ${appendRes.status}, submitting...`);
-
-  const submitRes = await tuiPublish(serverUrl, authHeaders, directory, {
-    type: "tui.command.execute",
-    properties: { command: "prompt.submit" },
-  }).catch((e: unknown) => {
-    log(`ERROR tui.command.execute: ${e}`);
-    throw e;
-  });
-
-  if (!submitRes.ok) {
-    const body = await submitRes.text().catch(() => "");
-    log(`ERROR tui.command.execute HTTP ${submitRes.status}: ${body.slice(0, 200)}`);
-    throw new Error(`HTTP ${submitRes.status}`);
-  }
-
-  log(`SUCCESS prompt submitted HTTP ${submitRes.status}`);
+  log(`SUCCESS HTTP ${res.status}`);
 
   if (!job.recurring) {
-    await unregisterTimer(job.id);
-    await deleteJob(job.id);
+    unregisterTimer(job.id);
+    deleteJob(job.id);
   }
 }

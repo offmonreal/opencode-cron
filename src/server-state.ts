@@ -1,9 +1,8 @@
-import { writeFile, readFile, mkdir } from "fs/promises";
-import { join } from "path";
-import { homedir } from "os";
-
-const stateDir = join(homedir(), ".config", "opencode-cron");
-const stateFile = join(stateDir, "server.json");
+// Server URL and credentials are kept in memory only.
+// They are set once at MCP server startup from environment variables / log detection
+// and reused by fire.ts for every job firing.
+// No disk persistence needed — if OpenCode restarts, the MCP server restarts too
+// and picks up fresh values from the environment.
 
 export interface ServerState {
   serverUrl: string;
@@ -11,16 +10,12 @@ export interface ServerState {
   serverPassword?: string;
 }
 
-export async function saveServerState(state: ServerState): Promise<void> {
-  await mkdir(stateDir, { recursive: true });
-  await writeFile(stateFile, JSON.stringify(state, null, 2));
+let state: ServerState | null = null;
+
+export function saveServerState(s: ServerState): void {
+  state = s;
 }
 
-export async function loadServerState(): Promise<ServerState | null> {
-  try {
-    const raw = await readFile(stateFile, "utf-8");
-    return JSON.parse(raw) as ServerState;
-  } catch {
-    return null;
-  }
+export function loadServerState(): ServerState | null {
+  return state;
 }

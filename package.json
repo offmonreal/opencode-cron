@@ -1,6 +1,6 @@
 {
   "name": "opencode-cron",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "CronCreate MCP tool for OpenCode — schedules recurring prompts into an active session",
   "type": "module",
   "bin": {
