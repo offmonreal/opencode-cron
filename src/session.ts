@@ -5,8 +5,18 @@ interface Session {
 }
 
 export async function findCurrentSession(serverUrl: string): Promise<string> {
-  const res = await fetch(`${serverUrl}/session`);
-  if (!res.ok) throw new Error(`Cannot reach OpenCode server at ${serverUrl} (${res.status})`);
+  let res: Response;
+  try {
+    res = await fetch(`${serverUrl}/session`);
+  } catch {
+    throw new Error(
+      `OpenCode HTTP server is not running at ${serverUrl}.\n` +
+      `This plugin requires OpenCode to run in server mode.\n` +
+      `Start it with: opencode serve\n` +
+      `Then open your project and try again.`
+    );
+  }
+  if (!res.ok) throw new Error(`OpenCode server error at ${serverUrl}: ${res.status}`);
   const sessions: Session[] = await res.json();
   const sorted = sessions
     .filter(s => !s.parentID)
