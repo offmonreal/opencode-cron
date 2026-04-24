@@ -12,7 +12,6 @@ export interface Job {
   serverUsername?: string;
   serverPassword?: string;
   recurring: boolean;
-  firePath: string;
   createdAt: string;
   workspaceDir?: string;
 }

@@ -2,22 +2,21 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
 import { findCurrentSession, resolveServerUrl } from "./session.js";
 import { createJob, deleteJob, listJobs } from "./storage.js";
 import { registerTimer, unregisterTimer } from "./scheduler.js";
 import { saveServerState } from "./server-state.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const firePath = join(__dirname, "fire.js");
-
-// Save current session credentials so fire.ts can use them even after OpenCode restarts
 await saveServerState({
   serverUrl: resolveServerUrl(),
   serverUsername: process.env.OPENCODE_SERVER_USERNAME,
   serverPassword: process.env.OPENCODE_SERVER_PASSWORD,
 });
+
+// Restore persisted jobs into the in-process scheduler on startup
+for (const job of await listJobs()) {
+  await registerTimer(job);
+}
 
 const server = new McpServer({ name: "opencode-cron", version: "1.0.0" });
 
@@ -35,7 +34,7 @@ server.tool(
     const sessionId = await findCurrentSession(url);
     const serverUsername = process.env.OPENCODE_SERVER_USERNAME;
     const serverPassword = process.env.OPENCODE_SERVER_PASSWORD;
-    const job = await createJob({ cron, prompt, sessionId, serverUrl: url, serverUsername, serverPassword, recurring, firePath, workspaceDir: process.cwd() });
+    const job = await createJob({ cron, prompt, sessionId, serverUrl: url, serverUsername, serverPassword, recurring, workspaceDir: process.cwd() });
     await registerTimer(job);
     return {
       content: [{ type: "text", text: `Job ${job.id} created. Cron: ${cron}. Session: ${sessionId}.` }],

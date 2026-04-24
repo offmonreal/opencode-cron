@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import { getJob, deleteJob } from "./storage.js";
 import { unregisterTimer } from "./scheduler.js";
 import { loadServerState } from "./server-state.js";
@@ -15,82 +14,77 @@ function log(msg: string) {
   try { appendFileSync(join(logDir, "fire.log"), line); } catch {}
 }
 
-const jobId = process.argv[2];
-if (!jobId) {
-  log("ERROR: no jobId argument");
-  process.exit(1);
-}
+export async function fireJob(jobId: string): Promise<void> {
+  log(`START jobId=${jobId}`);
 
-log(`START jobId=${jobId}`);
+  const job = await getJob(jobId).catch((e: unknown) => {
+    log(`ERROR loading job: ${e}`);
+    throw e;
+  });
 
-const job = await getJob(jobId).catch((e: unknown) => {
-  log(`ERROR loading job: ${e}`);
-  process.exit(1);
-});
+  log(`job loaded: cron=${job.cron} workspaceDir=${job.workspaceDir ?? "none"}`);
 
-log(`job loaded: cron=${job.cron} workspaceDir=${job.workspaceDir ?? "none"}`);
+  const state = await loadServerState();
+  const serverUrl = state?.serverUrl ?? job.serverUrl;
+  const serverUsername = state?.serverUsername ?? job.serverUsername;
+  const serverPassword = state?.serverPassword ?? job.serverPassword;
 
-const state = await loadServerState();
-const serverUrl = state?.serverUrl ?? job.serverUrl;
-const serverUsername = state?.serverUsername ?? job.serverUsername;
-const serverPassword = state?.serverPassword ?? job.serverPassword;
+  log(`serverUrl=${serverUrl} hasAuth=${!!(serverUsername || serverPassword)}`);
 
-log(`serverUrl=${serverUrl} hasAuth=${!!(serverUsername || serverPassword)}`);
+  const authHeaders: Record<string, string> = {};
+  if (serverUsername || serverPassword) {
+    const encoded = Buffer.from(`${serverUsername ?? ""}:${serverPassword ?? ""}`).toString("base64");
+    authHeaders["Authorization"] = `Basic ${encoded}`;
+  }
 
-const authHeaders: Record<string, string> = {};
-if (serverUsername || serverPassword) {
-  const encoded = Buffer.from(`${serverUsername ?? ""}:${serverPassword ?? ""}`).toString("base64");
-  authHeaders["Authorization"] = `Basic ${encoded}`;
-}
-
-async function getCurrentSessionId(): Promise<string> {
-  const res = await fetch(`${serverUrl}/session`, { headers: authHeaders }).catch((e: unknown) => {
+  const sessionRes = await fetch(`${serverUrl}/session`, { headers: authHeaders }).catch((e: unknown) => {
     log(`ERROR fetching sessions: ${e}`);
     return null;
   });
-  if (!res) return job.sessionId;
-  if (!res.ok) {
-    log(`ERROR GET /session → HTTP ${res.status} ${res.statusText}`);
-    return job.sessionId;
-  }
-  const sessions: Array<{ id: string; directory?: string; parentID?: string; time: { updated: number } }> = await res.json();
-  const roots = sessions.filter(s => !s.parentID).sort((a, b) => b.time.updated - a.time.updated);
-  log(`sessions total=${sessions.length} roots=${roots.length}`);
-  if (job.workspaceDir) {
-    const match = roots.find(s => s.directory === job.workspaceDir);
-    if (match) {
-      log(`session matched by workspaceDir: ${match.id}`);
-      return match.id;
+
+  let sessionId = job.sessionId;
+  if (sessionRes?.ok) {
+    const sessions: Array<{ id: string; directory?: string; parentID?: string; time: { updated: number } }> = await sessionRes.json();
+    const roots = sessions.filter(s => !s.parentID).sort((a, b) => b.time.updated - a.time.updated);
+    log(`sessions total=${sessions.length} roots=${roots.length}`);
+    if (job.workspaceDir) {
+      const match = roots.find(s => s.directory === job.workspaceDir);
+      if (match) {
+        log(`session matched by workspaceDir: ${match.id}`);
+        sessionId = match.id;
+      } else {
+        log(`no session matched workspaceDir=${job.workspaceDir}, falling back to most recent`);
+        sessionId = roots[0]?.id ?? job.sessionId;
+      }
+    } else {
+      sessionId = roots[0]?.id ?? job.sessionId;
     }
-    log(`no session matched workspaceDir=${job.workspaceDir}, falling back to most recent`);
+    log(`using session: ${sessionId} dir=${roots.find(s => s.id === sessionId)?.directory ?? "unknown"}`);
+  } else if (sessionRes) {
+    log(`ERROR GET /session → HTTP ${sessionRes.status}`);
   }
-  const fallback = roots[0]?.id ?? job.sessionId;
-  log(`using session: ${fallback} dir=${roots[0]?.directory ?? "unknown"}`);
-  return fallback;
-}
 
-const sessionId = await getCurrentSessionId();
+  log(`POST /session/${sessionId}/prompt_async prompt="${job.prompt.slice(0, 60)}"`);
 
-log(`POST /session/${sessionId}/prompt_async prompt="${job.prompt.slice(0, 60)}"`);
+  const promptRes = await fetch(`${serverUrl}/session/${sessionId}/prompt_async`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders },
+    body: JSON.stringify({ parts: [{ type: "text", text: job.prompt }] }),
+  }).catch((e: unknown) => {
+    log(`ERROR POST prompt_async: ${e}`);
+    throw e;
+  });
 
-const promptRes = await fetch(`${serverUrl}/session/${sessionId}/prompt_async`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json", ...authHeaders },
-  body: JSON.stringify({ parts: [{ type: "text", text: job.prompt }] }),
-}).catch((e: unknown) => {
-  log(`ERROR POST prompt_async: ${e}`);
-  process.exit(1);
-});
+  if (!promptRes.ok) {
+    const body = await promptRes.text().catch(() => "");
+    log(`ERROR HTTP ${promptRes.status} ${promptRes.statusText}: ${body.slice(0, 200)}`);
+    throw new Error(`HTTP ${promptRes.status}`);
+  }
 
-if (!promptRes.ok) {
-  const body = await promptRes.text().catch(() => "");
-  log(`ERROR HTTP ${promptRes.status} ${promptRes.statusText}: ${body.slice(0, 200)}`);
-  process.exit(1);
-}
+  log(`SUCCESS HTTP ${promptRes.status}`);
 
-log(`SUCCESS HTTP ${promptRes.status}`);
-
-if (!job.recurring) {
-  await unregisterTimer(job.id);
-  await deleteJob(job.id);
+  if (!job.recurring) {
+    await unregisterTimer(job.id);
+    await deleteJob(job.id);
+  }
 }
