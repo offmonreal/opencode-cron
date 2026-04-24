@@ -14,6 +14,15 @@ function log(msg: string) {
   try { appendFileSync(join(logDir, "fire.log"), line); } catch {}
 }
 
+async function tuiPublish(serverUrl: string, authHeaders: Record<string, string>, directory: string, body: object): Promise<Response> {
+  const url = `${serverUrl}/tui/publish?directory=${encodeURIComponent(directory)}`;
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders },
+    body: JSON.stringify(body),
+  });
+}
+
 export async function fireJob(jobId: string): Promise<void> {
   log(`START jobId=${jobId}`);
 
@@ -29,7 +38,7 @@ export async function fireJob(jobId: string): Promise<void> {
   const serverUsername = state?.serverUsername ?? job.serverUsername;
   const serverPassword = state?.serverPassword ?? job.serverPassword;
 
-  log(`serverUrl=${serverUrl} hasAuth=${!!(serverUsername || serverPassword)}`);
+  log(`serverUrl=${serverUrl}`);
 
   const authHeaders: Record<string, string> = {};
   if (serverUsername || serverPassword) {
@@ -37,51 +46,41 @@ export async function fireJob(jobId: string): Promise<void> {
     authHeaders["Authorization"] = `Basic ${encoded}`;
   }
 
-  const sessionRes = await fetch(`${serverUrl}/session`, { headers: authHeaders }).catch((e: unknown) => {
-    log(`ERROR fetching sessions: ${e}`);
-    return null;
-  });
+  const directory = job.workspaceDir ?? process.cwd();
 
-  let sessionId = job.sessionId;
-  if (sessionRes?.ok) {
-    const sessions: Array<{ id: string; directory?: string; parentID?: string; time: { updated: number } }> = await sessionRes.json();
-    const roots = sessions.filter(s => !s.parentID).sort((a, b) => b.time.updated - a.time.updated);
-    log(`sessions total=${sessions.length} roots=${roots.length}`);
-    if (job.workspaceDir) {
-      const match = roots.find(s => s.directory === job.workspaceDir);
-      if (match) {
-        log(`session matched by workspaceDir: ${match.id}`);
-        sessionId = match.id;
-      } else {
-        log(`no session matched workspaceDir=${job.workspaceDir}, falling back to most recent`);
-        sessionId = roots[0]?.id ?? job.sessionId;
-      }
-    } else {
-      sessionId = roots[0]?.id ?? job.sessionId;
-    }
-    log(`using session: ${sessionId} dir=${roots.find(s => s.id === sessionId)?.directory ?? "unknown"}`);
-  } else if (sessionRes) {
-    log(`ERROR GET /session → HTTP ${sessionRes.status}`);
-  }
+  log(`tui.prompt.append → directory=${directory} prompt="${job.prompt.slice(0, 60)}"`);
 
-  log(`POST /session/${sessionId}/prompt_async prompt="${job.prompt.slice(0, 60)}"`);
-
-  const promptRes = await fetch(`${serverUrl}/session/${sessionId}/prompt_async`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders },
-    body: JSON.stringify({ parts: [{ type: "text", text: job.prompt }] }),
+  const appendRes = await tuiPublish(serverUrl, authHeaders, directory, {
+    type: "tui.prompt.append",
+    properties: { text: job.prompt },
   }).catch((e: unknown) => {
-    log(`ERROR POST prompt_async: ${e}`);
+    log(`ERROR tui.prompt.append: ${e}`);
     throw e;
   });
 
-  if (!promptRes.ok) {
-    const body = await promptRes.text().catch(() => "");
-    log(`ERROR HTTP ${promptRes.status} ${promptRes.statusText}: ${body.slice(0, 200)}`);
-    throw new Error(`HTTP ${promptRes.status}`);
+  if (!appendRes.ok) {
+    const body = await appendRes.text().catch(() => "");
+    log(`ERROR tui.prompt.append HTTP ${appendRes.status}: ${body.slice(0, 200)}`);
+    throw new Error(`HTTP ${appendRes.status}`);
   }
 
-  log(`SUCCESS HTTP ${promptRes.status}`);
+  log(`tui.prompt.append OK ${appendRes.status}, submitting...`);
+
+  const submitRes = await tuiPublish(serverUrl, authHeaders, directory, {
+    type: "tui.command.execute",
+    properties: { command: "prompt.submit" },
+  }).catch((e: unknown) => {
+    log(`ERROR tui.command.execute: ${e}`);
+    throw e;
+  });
+
+  if (!submitRes.ok) {
+    const body = await submitRes.text().catch(() => "");
+    log(`ERROR tui.command.execute HTTP ${submitRes.status}: ${body.slice(0, 200)}`);
+    throw new Error(`HTTP ${submitRes.status}`);
+  }
+
+  log(`SUCCESS prompt submitted HTTP ${submitRes.status}`);
 
   if (!job.recurring) {
     await unregisterTimer(job.id);
