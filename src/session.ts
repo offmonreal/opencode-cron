@@ -4,16 +4,23 @@ interface Session {
   updatedAt: number;
 }
 
+export function resolveServerUrl(override?: string): string {
+  if (override) return override;
+  if (process.env.OPENCODE_SERVER_URL) return process.env.OPENCODE_SERVER_URL;
+  const port = process.env.OPENCODE_PORT ?? "4096";
+  return `http://127.0.0.1:${port}`;
+}
+
 export async function findCurrentSession(serverUrl: string): Promise<string> {
   let res: Response;
   try {
     res = await fetch(`${serverUrl}/session`);
   } catch {
     throw new Error(
-      `OpenCode HTTP server is not running at ${serverUrl}.\n` +
-      `This plugin requires OpenCode to run in server mode.\n` +
-      `Start it with: opencode serve\n` +
-      `Then open your project and try again.`
+      `Cannot reach OpenCode server at ${serverUrl}.\n` +
+      `The desktop app exposes the API on a dynamic port via OPENCODE_PORT env var.\n` +
+      `Detected port: ${process.env.OPENCODE_PORT ?? "not set, using 4096"}.\n` +
+      `Alternatively run: opencode serve`
     );
   }
   if (!res.ok) throw new Error(`OpenCode server error at ${serverUrl}: ${res.status}`);

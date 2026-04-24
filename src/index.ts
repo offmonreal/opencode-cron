@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import { findCurrentSession } from "./session.js";
+import { findCurrentSession, resolveServerUrl } from "./session.js";
 import { createJob, deleteJob, listJobs } from "./storage.js";
 import { registerTimer, unregisterTimer } from "./scheduler.js";
 
@@ -23,7 +23,7 @@ server.tool(
     serverUrl: z.string().optional().describe("OpenCode server URL (default: http://localhost:4096)"),
   },
   async ({ cron, prompt, recurring = true, serverUrl }) => {
-    const url = serverUrl ?? process.env.OPENCODE_SERVER_URL ?? "http://localhost:4096";
+    const url = resolveServerUrl(serverUrl);
     const sessionId = await findCurrentSession(url);
     const job = await createJob({ cron, prompt, sessionId, serverUrl: url, recurring, firePath });
     await registerTimer(job);

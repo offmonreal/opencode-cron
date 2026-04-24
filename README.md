@@ -7,7 +7,18 @@ Unlike `opencode-scheduler`, this injects prompts into the **same existing sessi
 ## Requirements
 
 - Node.js ≥ 20
-- `opencode serve` running (port 4096 by default)
+- OpenCode desktop app **or** `opencode serve`
+
+## How the server URL is resolved
+
+The plugin resolves the OpenCode HTTP API URL in this order:
+
+1. `serverUrl` parameter passed to `CronCreate`
+2. `OPENCODE_SERVER_URL` environment variable
+3. `http://127.0.0.1:$OPENCODE_PORT` — the desktop app sets `OPENCODE_PORT` automatically
+4. `http://127.0.0.1:4096` — default fallback for `opencode serve`
+
+The desktop app starts its own embedded HTTP server on a dynamic port and sets `OPENCODE_PORT`. Since MCP servers are subprocesses of OpenCode, they inherit this variable automatically — no manual configuration needed.
 
 ## Install
 
@@ -22,7 +33,20 @@ Add to `opencode.json`:
   "mcp": {
     "cron": {
       "type": "local",
-      "command": "opencode-cron"
+      "command": ["opencode-cron"]
+    }
+  }
+}
+```
+
+Or without global install, point directly to the built file:
+
+```json
+{
+  "mcp": {
+    "cron": {
+      "type": "local",
+      "command": ["node", "/path/to/opencode-cron/dist/index.js"]
     }
   }
 }
@@ -43,11 +67,11 @@ Add to `opencode.json`:
 | `cron` | string | — | Cron expression, e.g. `*/5 * * * *` |
 | `prompt` | string | — | Text to inject when timer fires |
 | `recurring` | boolean | `true` | `false` = run once then delete |
-| `serverUrl` | string | `http://localhost:4096` | OpenCode server URL |
+| `serverUrl` | string | auto | Override OpenCode server URL |
 
 ## How it works
 
-1. `CronCreate` calls `GET /session` to find the current active session
+1. `CronCreate` resolves the OpenCode server URL and calls `GET /session` to find the current active session
 2. Registers a crontab entry pointing to the fire script
 3. At each tick: `POST /session/:id/prompt_async` — non-blocking inject into the session
 
