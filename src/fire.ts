@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { getJob, deleteJob } from "./storage.js";
 import { unregisterTimer } from "./scheduler.js";
+import { loadServerState } from "./server-state.js";
 
 const jobId = process.argv[2];
 if (!jobId) {
@@ -10,9 +11,32 @@ if (!jobId) {
 
 const job = await getJob(jobId);
 
-const res = await fetch(`${job.serverUrl}/session/${job.sessionId}/prompt_async`, {
+// Prefer live server state (updated each time MCP server starts) over stale job values
+const state = await loadServerState();
+const serverUrl = state?.serverUrl ?? job.serverUrl;
+const serverUsername = state?.serverUsername ?? job.serverUsername;
+const serverPassword = state?.serverPassword ?? job.serverPassword;
+
+const authHeaders: Record<string, string> = {};
+if (serverUsername || serverPassword) {
+  const encoded = Buffer.from(`${serverUsername ?? ""}:${serverPassword ?? ""}`).toString("base64");
+  authHeaders["Authorization"] = `Basic ${encoded}`;
+}
+
+// Always resolve the current active session at fire time
+async function getCurrentSessionId(): Promise<string> {
+  const res = await fetch(`${serverUrl}/session`, { headers: authHeaders });
+  if (!res.ok) return job.sessionId;
+  const sessions: Array<{ id: string; parentID?: string; time: { updated: number } }> = await res.json();
+  const sorted = sessions.filter(s => !s.parentID).sort((a, b) => b.time.updated - a.time.updated);
+  return sorted[0]?.id ?? job.sessionId;
+}
+
+const sessionId = await getCurrentSessionId();
+
+const res = await fetch(`${serverUrl}/session/${sessionId}/prompt_async`, {
   method: "POST",
-  headers: { "Content-Type": "application/json" },
+  headers: { "Content-Type": "application/json", ...authHeaders },
   body: JSON.stringify({ parts: [{ type: "text", text: job.prompt }] }),
 });
 

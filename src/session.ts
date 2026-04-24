@@ -1,33 +1,73 @@
+import { readdirSync, readFileSync } from "fs";
+import { join } from "path";
+
 interface Session {
   id: string;
   parentID?: string;
-  updatedAt: number;
+  time: {
+    created: number;
+    updated: number;
+  };
+}
+
+function findPortFromLog(): string | null {
+  const logDir = join(process.env.HOME ?? "", "Library/Logs/ai.opencode.desktop");
+  let files: string[];
+  try {
+    files = readdirSync(logDir)
+      .filter(f => f.endsWith(".log"))
+      .sort()
+      .reverse();
+  } catch {
+    return null;
+  }
+  for (const file of files) {
+    try {
+      const content = readFileSync(join(logDir, file), "utf8");
+      const matches = [...content.matchAll(/Spawning sidecar port=(\d+)/g)];
+      if (matches.length > 0) {
+        return matches[matches.length - 1][1];
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 export function resolveServerUrl(override?: string): string {
   if (override) return override;
   if (process.env.OPENCODE_SERVER_URL) return process.env.OPENCODE_SERVER_URL;
-  const port = process.env.OPENCODE_PORT ?? "4096";
-  return `http://127.0.0.1:${port}`;
+  if (process.env.OPENCODE_PORT) return `http://127.0.0.1:${process.env.OPENCODE_PORT}`;
+  const port = findPortFromLog();
+  if (port) return `http://127.0.0.1:${port}`;
+  return "http://127.0.0.1:4096";
+}
+
+export function makeAuthHeaders(): HeadersInit {
+  const username = process.env.OPENCODE_SERVER_USERNAME ?? "";
+  const password = process.env.OPENCODE_SERVER_PASSWORD ?? "";
+  if (!username && !password) return {};
+  const encoded = Buffer.from(`${username}:${password}`).toString("base64");
+  return { Authorization: `Basic ${encoded}` };
 }
 
 export async function findCurrentSession(serverUrl: string): Promise<string> {
   let res: Response;
   try {
-    res = await fetch(`${serverUrl}/session`);
+    res = await fetch(`${serverUrl}/session`, { headers: makeAuthHeaders() });
   } catch {
-    throw new Error(
-      `Cannot reach OpenCode server at ${serverUrl}.\n` +
-      `The desktop app exposes the API on a dynamic port via OPENCODE_PORT env var.\n` +
-      `Detected port: ${process.env.OPENCODE_PORT ?? "not set, using 4096"}.\n` +
-      `Alternatively run: opencode serve`
-    );
+    const port = findPortFromLog();
+    const hint = port
+      ? `Found sidecar port ${port} in logs — maybe OpenCode was restarted? Try again.`
+      : `Could not auto-detect port. Set OPENCODE_SERVER_URL env var or pass serverUrl to CronCreate.`;
+    throw new Error(`Cannot reach OpenCode server at ${serverUrl}.\n${hint}`);
   }
   if (!res.ok) throw new Error(`OpenCode server error at ${serverUrl}: ${res.status}`);
   const sessions: Session[] = await res.json();
   const sorted = sessions
     .filter(s => !s.parentID)
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+    .sort((a, b) => b.time.updated - a.time.updated);
   if (sorted.length === 0) throw new Error("No active session found");
   return sorted[0].id;
 }

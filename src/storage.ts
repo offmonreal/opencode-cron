@@ -9,6 +9,8 @@ export interface Job {
   prompt: string;
   sessionId: string;
   serverUrl: string;
+  serverUsername?: string;
+  serverPassword?: string;
   recurring: boolean;
   firePath: string;
   createdAt: string;
