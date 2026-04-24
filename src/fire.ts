@@ -56,6 +56,12 @@ export async function fireJob(jobId: string): Promise<void> {
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     log(`ERROR prompt_async HTTP ${res.status}: ${body.slice(0, 200)}`);
+    // Session gone — stop the job so it doesn't keep firing into the void.
+    if (res.status === 404 || res.status === 410) {
+      log(`Session ${sessionId} not found, stopping job ${jobId}`);
+      unregisterTimer(jobId);
+      deleteJob(jobId);
+    }
     throw new Error(`HTTP ${res.status}`);
   }
 
